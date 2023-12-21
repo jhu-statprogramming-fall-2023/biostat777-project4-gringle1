@@ -1,0 +1,397 @@
+---
+title: "Exploring the Cost of Childcare in the U.S."
+output:
+  flexdashboard::flex_dashboard:
+    #source_code: embed
+    theme: yeti
+    orientation: columns
+    vertical_layout: fill
+runtime: shiny
+resource_files:
+- data/childcare_costs.rds
+- "biostat777-project4-gringle1.Rproj"
+---
+
+```{r global}
+
+library(flexdashboard)
+library(tidyverse)
+library(here)
+library(maps)
+library(ggpubr)
+library(scico)
+library(ggcorrplot)
+
+# if (!(file.exists(here("data")))) {
+#   dir.create(here("data"))
+#   if (!(file.exists(here("data","childcare_costs.rds")))) {
+#      tuesdata <- tidytuesdayR::tt_load('2023-05-09')
+#      childcare_costs <- tuesdata$childcare_costs
+#      counties <- tuesdata$counties
+#      childcare_costs <- childcare_costs %>% left_join(counties,by="county_fips_code")
+#      childcare_costs <- childcare_costs %>% filter(!is.na(mfcc_preschool),!is.na(mc_preschool))
+#      saveRDS(childcare_costs,here("data","childcare_costs.rds"))
+# 
+#   }
+# } else {
+# childcare_costs <- readRDS(here("data","childcare_costs.rds"))
+# }
+childcare_costs <- readRDS(here("data","childcare_costs.rds"))
+states <- childcare_costs %>% pull(state_name) %>% unique()
+years <- childcare_costs %>% pull(study_year) %>% unique()
+```
+
+# About
+
+This dashboard allows the user to explore the cost of childcare in a particular state and across the United States, for multiple age groups and types of care, and across time.  
+
+Data come from the [National Database of Childcare Prices](https://www.dol.gov/agencies/wb/topics/featured-childcare){.uri} and are available for download with a data dictionary via [TidyTuesday on Github](https://github.com/rfordatascience/tidytuesday/blob/master/data/2023/2023-05-09/readme.md){.uri}.
+
+Dashboard was created by Grace Ringlein for Project for Biostat-777. 
+
+**Contents:**
+
+- The "By County" tab allows the user to visualize the weekly cost of care for all of the counties in a given state, for a selected year and type of care. 
+
+- The "Over time" tab allows the user to view the average costs in the US from 2008-2018, by type of care, and the cost in each state for, averaged across types of care. We see that the cost of child care in the U.S. has generally increased over time for all types of care (while Center-based care is more expensive) and that there is heterogeniety between states in temporal patterns. 
+
+- The "Correlation between types of care" shows that the costs of types of care are highly correlated with each other.
+
+- The "Exploring Potential Factors Related to Childcare Price" tab allows the user to plot childcare price versus county population, percentage of the population that identifies as White, Black, or Hispanic, unemployment rate, and poverty rate for families, to explore whether there are relationships between these covariates and prices in the data. 
+
+- The "Example Analysis" tab illustrates how one could use the data in a more formal analysis, by investigating how costs differ by type of care and age group, when accounting for state and year, using a linear mixed effects model.
+
+# The Data 
+
+Data come from the [National Database of Childcare Prices](https://www.dol.gov/agencies/wb/topics/featured-childcare){.uri} and are available for download with a data dictionary via [TidyTuesday on Github](https://github.com/rfordatascience/tidytuesday/blob/master/data/2023/2023-05-09/readme.md){.uri}.
+
+The data set includes weekly median cost of childcare per county for Center-based and family-based care, for infants, toddlers, preschoolers, and school-aged children. Additional information about the counties is also contained in the data, such as population, unemployment rate, and demographics. 
+
+Abbreviations of note: "mfcc" refers to family based care, and "mc" refers to center based care. "sa" stands for school aged.
+
+```{r}
+childcare_costs %>% 
+  relocate(state_name,county_name,study_year,mc_infant,mc_toddler,mc_preschool,mfcc_infant,mfcc_toddler,mfcc_preschool,mcsa,mfccsa) %>%
+  DT::datatable()
+```
+
+# By County
+
+## Column {data-width=100} {.sidebar}
+
+### Select options:
+
+```{r}
+
+selectInput("my_state", label = "State:",
+            choices = states, selected = "Maryland")
+
+sliderInput("my_year", label = "Year:",
+            min = 2013, max = 2018, step = 1, value = 2018)
+
+selectInput("age_group", label = "Age group:",
+            choices = c("Infants","Toddlers","Preschoolers","School Age Children"), selected = "Infant")
+
+selectInput("type", label = "Type of care:",
+            choices = c("Family-based care","Center-based care"), selected = "Center-based care")
+
+```
+
+## Column {data-width="650"}
+
+### County Child-Care Prices
+
+```{r fig.cap="Cost is the median price per week for full-time weekly care in US dollars. Data comes from National Database of Childcare Prices."}
+
+#input<-list("my_state"="maryland","my_year"=2012,"age_group"="Infant")
+#reactive()
+renderPlot({
+  
+  my_state <- tolower(input$my_state)
+  my_year <- input$my_year
+  var <- paste0(
+    case_when(
+      input$type == "Family-based care" ~ "mfcc",
+      input$type == "Center-based care" ~ "mc"),
+    case_when(
+      input$age_group == "Infants" ~ "_infant",
+      input$age_group == "Toddlers" ~ "_toddler",
+      input$age_group == "Preschoolers"~ "_preschool",
+      input$age_group == "School Age Children"~ "sa"))
+
+    county_map <- map_data("county") %>% 
+      rename(state=region,county=subregion) %>% 
+      filter(state==my_state)
+    
+    county_fips <- maps::county.fips %>%
+      separate(polyname,into=c("state","county"),sep=",") %>%
+      rename(county_fips_code=fips) %>% filter(state==my_state)
+    
+    tmp <- childcare_costs %>%
+      filter(tolower(state_name)==my_state,study_year==my_year) %>%
+      full_join(county_fips,by="county_fips_code") %>% 
+      full_join(county_map,by="county") 
+
+  ggplot(tmp) +
+    geom_polygon(aes(x=long, y = lat, group = group,fill=!!sym(var)),col="black") + 
+    scale_fill_scico(name="Cost",palette="batlow") + 
+    coord_fixed(1.3) + 
+    theme_bw() + 
+    labs(title=paste("Child care costs for",
+                     input$type,
+                     "for",
+                     input$age_group,
+                     "in",
+                     input$my_state,
+                     ",",
+                     input$my_year
+                     ))
+})
+```
+
+<!-- ### US Child-Care Prices -->
+
+<!-- ```{r} -->
+<!-- ### Chart A -->
+
+<!-- #input<-list("my_state"="maryland","my_year"=2012,"age_group"="Infant") -->
+<!-- #reactive() -->
+<!-- renderPlot({ -->
+
+<!--   my_year <- input$my_year -->
+<!--   var <- paste0( -->
+<!--     case_when( -->
+<!--       input$type == "Family-based care" ~ "mfcc", -->
+<!--       input$type == "Center-based care" ~ "mc"), -->
+<!--     case_when( -->
+<!--       input$age_group == "Infants" ~ "_infant", -->
+<!--       input$age_group == "Toddlers" ~ "_toddler", -->
+<!--       input$age_group == "Preschoolers"~ "_preschool", -->
+<!--       input$age_group == "School Age Children"~ "sa")) -->
+
+
+<!--   state_map<- map_data("state") %>% rename(state_name=region) -->
+
+<!--   tmp <- childcare_costs %>% -->
+<!--     mutate(state_name=tolower(state_name)) %>% -->
+<!--     filter(study_year==my_year) %>% -->
+<!--     full_join(state_map,by="state_name") -->
+
+<!--   ggplot(tmp) + -->
+<!--     geom_polygon(aes(x=long, y = lat, group = group,fill=!!sym(var)),col="black") + -->
+<!--     scale_fill_viridis_c(name="Cost") + -->
+<!--     coord_fixed(1.3)  + theme_bw() + -->
+<!--     labs(title=paste("Child care costs for", -->
+<!--                      input$type, -->
+<!--                      "for", -->
+<!--                      input$age_group, -->
+<!--                      "in", -->
+<!--                      input$my_year -->
+<!--                      ), -->
+<!--          caption="Cost is the median price per week for full-time weekly care in US dollars. Data comes from National Database of Childcare Prices.") -->
+<!-- }) -->
+
+<!-- ``` -->
+
+Averaged across counties with-in each state, for the contiguous United States. Some states/years/data types are missing in the data set and are represented by gray shading.
+
+# Costs over time 
+
+## Column {.tabset .tab-fade data-height="10" data-width="200"}
+
+### By Age Group and Type of Care
+
+```{r fig.cap="Cost is the median price per week for full-time weekly care in US dollars. Averaged across all counties in the U.S. with available data. Data comes from National Database of Childcare Prices."}
+
+childcare_costs %>%
+  rename("mc_sa"=mcsa,
+         "mfcc_sa"=mfccsa) %>%
+    pivot_longer(cols=c("mc_infant","mc_toddler","mc_preschool","mfcc_infant","mfcc_toddler","mfcc_preschool","mc_sa","mfcc_sa")) %>%
+  group_by(study_year,name) %>% summarize("avg" = mean(value))  %>% 
+  separate(name,into=c("type","age_group"),sep="_") %>%
+  mutate(type = case_when(
+      type ==  "mfcc" ~ "Family-based care",
+      type ==  "mc" ~ "Center-based care"),
+    case_when(
+      age_group == "infant" ~"Infants",
+      age_group == "toddler" ~"Toddlers",
+      age_group == "preschool" ~"Preschoolers",
+      age_group == "sa" ~"School Age Children")) %>%
+   ggplot() + scale_colour_scico_d(palette="managua") + 
+  geom_line(aes(x=study_year,y=avg,colour=age_group,linetype=type))  +
+  theme_bw() + 
+  xlab("Cost") + 
+  ylab("Year") + 
+  scale_x_continuous(breaks=seq(2008,2018,by=1))+ 
+  labs(title="Cost of Childcare by age group and type of care")
+
+```
+
+### By State
+
+```{r fig.height=8,fig.width=11, fig.cap="Cost is the median price per week for full-time weekly care in US dollars. Cost is averaged across of community based and family based care, across age groups, and across counties within the state (for all available data). Data comes from National Database of Childcare Prices."}
+
+childcare_costs %>%
+  mutate(avg=(mc_infant + mc_toddler + mc_preschool + mfcc_infant + mfcc_toddler + mfcc_preschool + mcsa + mfccsa)/8) %>%
+  group_by(state_name,study_year) %>% 
+  summarize(avg=mean(avg)) %>%
+  ggplot() + 
+  geom_point(aes(x=study_year,y=avg)) +
+  xlab("Year") +
+  ylab("Cost") +
+  facet_wrap(.~state_name) + 
+  labs(title="Average Childcare Cost per State over time") +
+  theme_bw() + 
+  theme(axis.text = element_text(size=8))
+
+```
+
+# Correlation between types of care
+
+### Correlation between price of types of care
+
+```{r fig.height=8,fig.width=11,fig.cap="Cost is the median price per week for full-time weekly care in US dollars. Data comes from National Database of Childcare Prices."}
+tmp <- childcare_costs %>%
+  rename("mc_sa"=mcsa,
+         "mfcc_sa"=mfccsa) %>% select(c("mc_infant","mc_toddler","mc_preschool","mfcc_infant","mfcc_toddler","mfcc_preschool","mc_sa","mfcc_sa")) %>% 
+  rename("Family-based care for Infants" = mfcc_infant,
+        "Center-based care for Infants" =  mc_infant,
+         "Family-based care for Preschoolers"=mfcc_preschool,
+         "Center-based care for Preschools"=mc_preschool,
+
+         "Family-based care for Toddlers"= mfcc_toddler,
+        "Center-based care for Toddlers"= mc_toddler,
+         
+         "Family-based care for School Age Children"= mfcc_sa,
+       "Center-based care for School Age Children"=  mc_sa)
+         
+ggcorrplot(cor(tmp),lab=TRUE,lab_col="white")
+
+```
+
+# Exploration of related factors
+
+## Column {data-width=100} {.sidebar}
+
+### Select options:
+
+```{r}
+
+selectInput("my_new_state", label = "State:",
+            choices = states, selected = "Maryland")
+
+sliderInput("my_new_year", label = "Year:",
+            min = 2013, max = 2018, step = 1, value = 2018)
+
+selectInput("my_new_age_group", label = "Age group:",
+            choices = c("Infants","Toddlers","Preschoolers","School Age Children"), selected = "Infant")
+
+selectInput("my_new_type", label = "Type of care:",
+            choices = c("Family-based care","Center-based care"), selected = "Center-based care")
+
+selectInput("covariate", label = "Covariate:",
+            choices = c("Population",
+                        "Poverty rate for families",
+                        "% of Population that identifies as White",
+                        "% of Population that identifies as Black",
+                        "% of Population that identifies as Hispanic",
+                        "Unemployment Rate (Age 20-64)"),
+            selected = "Population")
+
+```
+
+## Column {data-width="650"}
+
+### Exploring Potential Factors Related to Childcare Price
+
+```{r fig.cap="Cost is the median price per week for full-time weekly care in US dollars. Data comes from National Database of Childcare Prices."}
+renderPlot({
+
+  my_new_year <- input$my_new_year
+  my_new_state <- input$my_new_state
+  
+  my_new_var <- paste0(
+      case_when(
+        input$my_new_type == "Family-based care" ~ "mfcc",
+        input$my_new_type == "Center-based care" ~ "mc"),
+      case_when(
+        input$my_new_age_group == "Infants" ~ "_infant",
+        input$my_new_age_group == "Toddlers" ~ "_toddler",
+        input$my_new_age_group == "Preschoolers"~ "_preschool",
+        input$my_new_age_group == "School Aged Children"~ "sa"))
+  
+  covariate <- case_when(
+    input$covariate  == "Population" ~ "total_pop",
+    input$covariate  == "% of Population that identifies as White" ~ "one_race_w",
+    input$covariate  == "% of Population that identifies as Black" ~ "one_race_b",
+    input$covariate  == "% of Population that identifies as Hispanic" ~ "hispanic",
+    input$covariate  == "Poverty rate for families" ~ "pr_f",
+    input$covariate  == "Unemployment Rate (Age 20-64)"~ "unr_20to64")
+  
+  p1 <- childcare_costs %>%
+    filter(study_year==my_new_year) %>%
+    mutate("my_state" = factor(case_when(
+             state_name == my_new_state ~ state_name,
+             TRUE ~ "Other"),levels=c(my_new_state,"Other"))) %>%
+      ggplot() + scale_colour_scico_d(palette="batlow") + 
+        geom_point(aes(x=!!sym(covariate), y = !!sym(my_new_var),colour=my_state)) + 
+    xlab(input$covariate) + 
+    ylab("Cost") + 
+    labs(title=paste("Cost of",input$my_new_type, "for",input$my_new_age_group,"versus",input$covariate),
+         subtitle="By county") +
+    theme_bw()
+  p1
+  # p2 <- childcare_costs %>%
+  #   filter(study_year > 2012) %>%
+  #   mutate("my_state" = case_when(
+  #            state_name == my_state ~ state_name,
+  #            TRUE ~ "Other")) %>%
+  #   group_by(study_year,my_state) %>% summarize("avg" = mean(!!sym(var))) %>%
+  #   ggplot() +
+  #   geom_line(aes(x=study_year,y=avg,colour=my_state)) +
+  #   geom_point(aes(x=study_year,y=avg,colour=my_state))
+  #
+  # ggarrange(p1,p2,nrow=2)
+
+})
+
+```
+
+# Example Analysis
+
+## Column {data-width="650"}
+
+### Fitting a mixed effects model
+
+Suppose we want to ask how costs differ by type of care and age group, when accounting for state and year? As we are not as interested in state and we reasonably may assume that costs within state are correlated, we can fit mixed effects model to answer this question, with a random effect for state. As prior exploration (see "Costs over time") suggested a linear time trend, we include a linear effect, for year since 2008.
+
+First we prepare the data
+
+```{r, echo=TRUE}
+df <- childcare_costs %>% rename("mc_sa"=mcsa,
+         "mfcc_sa"=mfccsa) %>%
+    pivot_longer(cols=c(
+      "mc_infant","mc_toddler",
+      "mc_preschool","mfcc_infant",
+      "mfcc_toddler","mfcc_preschool",
+      "mc_sa","mfcc_sa"),
+      values_to="Cost") %>%
+   separate(name,into=c("type","age_group"),sep="_") %>% 
+  mutate(study_year=study_year - 2008)
+```
+
+Then we fit the model: 
+
+```{r, echo=TRUE}
+library(lme4)
+library(broom.mixed)
+library(gtsummary)
+
+model <- lmer(Cost ~ type + age_group +  (1|state_name) + study_year,data=df)
+tbl_regression(model)
+```
+
+Abbreviations of note: "mfcc" refers to family based care, and "mc" refers to center based care. "sa" stands for school aged.
+
+We can see that with all else the same, Family-based case is on average 20 dollars cheaper than Center-based care, toddler care, preschool care, and school aged care are 11, 17, and 33 dollars cheaper respectively, and that with every year since 2008, cost of care when up 2.5 dollars. 95% confidence intervals for all of these estimates are very small.
+

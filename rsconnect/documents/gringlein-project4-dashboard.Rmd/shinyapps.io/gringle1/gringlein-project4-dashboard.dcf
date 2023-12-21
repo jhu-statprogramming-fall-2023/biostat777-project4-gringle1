@@ -1,0 +1,12 @@
+name: gringlein-project4-dashboard
+title: gringlein-project4-dashboard
+username: gringle1
+account: gringle1
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 10833261
+bundleId: 8071823
+url: https://gringle1.shinyapps.io/gringlein-project4-dashboard/
+version: 1
+asMultiple: FALSE
+asStatic: FALSE
